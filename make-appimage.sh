@@ -23,7 +23,7 @@ export ADD_HOOKS="self-updater.hook"
 export UPINFO="gh-releases-zsync|${GITHUB_REPOSITORY%/*}|${GITHUB_REPOSITORY#*/}|latest|*$ARCH.AppImage.zsync"
 export DEPLOY_VULKAN=1
 export DEPLOY_OPENGL=1
-export ANYLINUX_LIB=1
+export ANYLINUX_LIB=0
 export STRIP=1
 
 rm -rf "$APPDIR"
@@ -53,6 +53,9 @@ rm -rf "$APPDIR/workspace/runtime/build"
 cp "$BUILD_DIR/Launcher/local-build.sh" "$APPDIR/workspace/Launcher/local-build.sh"
 echo "$VERSION" >"$APPDIR/workspace/.bundle-version"
 
+# Ensure local-build.sh uses the bundled /usr/bin/env bash
+sed -i '1s|^.*$|#!/usr/bin/env bash|' "$APPDIR/workspace/Launcher/local-build.sh"
+
 if [ -d /usr/include ]; then
     cp -a /usr/include/. "$APPDIR/sysroot/usr/include/"
 fi
@@ -74,48 +77,7 @@ Categories=Game;
 Terminal=true
 EOF
 
-cat >"$APPDIR/AppRun.sh" <<'APPRUN'
-#!/bin/bash
-set -euo pipefail
-HERE="${SHARUN_DIR:-$(dirname "$(readlink -f "$0")")}"
-CACHE="${XDG_DATA_HOME:-$HOME/.local/share}/WiiCompiled/workspace"
-mkdir -p "$CACHE"
-
-if [ ! -f "$CACHE/.bundle-version" ] || \
-   [ "$(cat "$HERE/workspace/.bundle-version" 2>/dev/null)" != "$(cat "$CACHE/.bundle-version" 2>/dev/null)" ]; then
-    mkdir -p "$CACHE/Launcher"
-    for dir in runtime aurora-main projects; do
-        rm -rf "$CACHE/$dir"
-        cp -r "$HERE/workspace/$dir" "$CACHE/$dir"
-    done
-    cp "$HERE/workspace/Launcher/local-build.sh" "$CACHE/Launcher/local-build.sh"
-    cp "$HERE/workspace/.bundle-version" "$CACHE/.bundle-version"
-fi
-
-# Stable symlinks so CMake doesn't bake ephemeral /tmp/.mount_XXXX paths into build.ninja
-[ -L "$CACHE/toolchain" ] || rm -rf "$CACHE/toolchain"
-[ -L "$CACHE/native-prebuilt" ] || rm -rf "$CACHE/native-prebuilt"
-ln -sfn "$HERE/usr/toolchain" "$CACHE/toolchain"
-ln -sfn "$HERE/native-prebuilt" "$CACHE/native-prebuilt"
-
-extra_args=()
-if [ -d "$HERE/sysroot" ]; then
-    [ -L "$CACHE/sysroot" ] || rm -rf "$CACHE/sysroot"
-    ln -sfn "$HERE/sysroot" "$CACHE/sysroot"
-    extra_args+=(--sysroot "$CACHE/sysroot")
-fi
-
-exec "$HERE/bin/wiicompiled-setup" --workspace "$CACHE" \
-    --translator-bin "$HERE/bin/translator-cli" \
-    --disc-tool-bin "$HERE/bin/nodtool" \
-    --cc "$CACHE/toolchain/bin/clang" \
-    --cxx "$CACHE/toolchain/bin/clang++" \
-    --fuse-ld lld \
-    --cmake "$CACHE/toolchain/bin/cmake" \
-    --ninja "$CACHE/toolchain/bin/ninja" \
-    --native-prebuilt-dir "$CACHE/native-prebuilt" \
-    "${extra_args[@]}" "$@"
-APPRUN
+cp "${PWD}/AppRun.sh" "$APPDIR/AppRun.sh"
 chmod +x "$APPDIR/AppRun.sh"
 
 echo "Deploying dependencies with quick-sharun..."
@@ -129,9 +91,13 @@ quick-sharun \
     "$APPDIR/usr/toolchain/bin/cmake" \
     "$APPDIR/usr/toolchain/bin/ninja" \
     /usr/bin/bash \
+    /usr/bin/env \
     /usr/bin/tar \
     /usr/bin/sha256sum \
-    /usr/bin/nproc
+    /usr/bin/nproc \
+    /usr/bin/awk \
+    /usr/bin/sed \
+    /usr/bin/grep
 
 # Re-establish toolchain symlinks inside the package
 (
@@ -140,6 +106,10 @@ quick-sharun \
     ln -sf clang clang++
     ln -sf lld ld.lld
     ln -sf llvm-ar llvm-ranlib
+)
+(
+    cd "$APPDIR/bin"
+    ln -sf bash sh
 )
 
 echo "Generating AppImage via quick-sharun..."
